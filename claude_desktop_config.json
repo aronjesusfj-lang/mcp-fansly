@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "fansly-mcp": {
+      "command": "node",
+      "args": ["/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/build/index.js"],
+      "env": {
+        "USER_DATA_DIR": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/browser_data",
+        "DB_PATH": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/fansly_analytics.db",
+        "HEADLESS": "false",
+        "MAX_RETRIES": "3",
+        "BACKOFF_BASE_MS": "1000",
+        "REQUEST_TIMEOUT_MS": "30000"
+      }
+    }
+  }
+}

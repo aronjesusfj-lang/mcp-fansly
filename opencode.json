@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "fansly-mcp": {
+      "type": "local",
+      "command": [
+        "node",
+        "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/build/index.js"
+      ],
+      "enabled": true,
+      "environment": {
+        "USER_DATA_DIR": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/browser_data",
+        "DB_PATH": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/fansly_analytics.db",
+        "HEADLESS": "false",
+        "MAX_RETRIES": "3",
+        "BACKOFF_BASE_MS": "1000",
+        "REQUEST_TIMEOUT_MS": "30000"
+      }
+    }
+  }
+}

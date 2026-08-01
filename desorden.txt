@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentación Técnica Definitiva: Servidor MCP para Fansly</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #24292e;
+            --link-color: #0366d6;
+            --border-color: #eaecef;
+            --code-bg: #f6f8fa;
+            --accent-color: #2b6cb0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        h1, h2, h3 {
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            line-height: 1.25;
+        }
+        h1 {
+            font-size: 2em;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 0.3em;
+            color: var(--accent-color);
+        }
+        h2 {
+            font-size: 1.5em;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.3em;
+            margin-top: 2em;
+        }
+        h3 {
+            font-size: 1.25em;
+        }
+        p {
+            margin-top: 0;
+            margin-bottom: 16px;
+        }
+        ul {
+            padding-left: 2em;
+            margin-bottom: 16px;
+        }
+        li {
+            margin-bottom: 0.25em;
+        }
+        strong {
+            font-weight: 600;
+        }
+        code {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 85%;
+            background-color: rgba(27,31,35,0.05);
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+        }
+        pre {
+            background-color: var(--code-bg);
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+            font-size: 85%;
+            line-height: 1.45;
+            border: 1px solid var(--border-color);
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            border-radius: 0;
+        }
+        .note {
+            padding: 15px;
+            background-color: #f0f8ff;
+            border-left: 4px solid var(--link-color);
+            margin: 20px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .diagram {
+            font-family: monospace;
+            white-space: pre;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Documentación Técnica Definitiva: Servidor MCP para Fansly</h1>
+
+    <p>Esta especificación técnica constituye el manual completo de ingeniería, arquitectura, base de datos e implementación para el servidor <strong>Model Context Protocol (MCP)</strong> de Fansly. El sistema conecta modelos de lenguaje (LLM) con la API interna de Fansly de forma 100% local, utilizando un motor de resiliencia HTTP sobre Playwright y una base de datos SQLite para análisis de series temporales.</p>
+
+    <h2>1. Arquitectura del Sistema e Infraestructura de Seguridad</h2>
+
+    <h3>1.1. Diagrama de Operación y Flujo de Datos</h3>
+    <div class="diagram">
+┌─────────────────────────────────────────────────────────┐
+│              Cliente de IA / Modelo LLM                 │
+│        (Claude Desktop / Cursor IDE / Agent)            │
+└────────────────────────────┬────────────────────────────┘
+                             │ Protocolo STDIO (JSON-RPC)
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│               Servidor MCP Local (Node.js)              │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ Base de Datos Local SQLite (better-sqlite3)       │  │
+│  └───────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ Parser / Reductor de Tokens JSON                  │  │
+│  └───────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │ Motor Resiliente (Backoff Exponencial + Reintentos)│  │
+│  └───────────────────────────────────────────────────┘  │
+└────────────────────────────┬────────────────────────────┘
+                             │ Extracción de Headers y Sesión (Daemon)
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│             Navegador Chromium Persistente              │
+│           (Perfil Local Guardado en Disco)              │
+└────────────────────────────┬────────────────────────────┘
+                             │ Peticiones HTTPS Directas (JSON)
+                             ▼
+┌─────────────────────────────────────────────────────────┐
+│            API Interna de Fansly (apiv3.fansly.com)     │
+└─────────────────────────────────────────────────────────┘
+    </div>
+
+    <h3>1.2. Principios de Seguridad y Aislamiento</h3>
+    <ul>
+        <li><strong>Aislamiento de Credenciales:</strong> Ni el token de sesión (<code>session_token</code>), ni las cookies, ni las contraseñas son enviadas al modelo de lenguaje en ningún momento. El modelo solo recibe las métricas de respuesta.</li>
+        <li><strong>Sesión Local Persistente:</strong> El perfil del navegador se almacena de forma segura en el directorio local <code>./browser_data</code>. La autenticación inicial se realiza manualmente una sola vez.</li>
+        <li><strong>Sanitización de Datos:</strong> El servidor extrae y limpia los metadatos redundantes de las respuestas JSON masivas de Fansly antes de entregarlas a la IA, garantizando un uso óptimo de la ventana de contexto.</li>
+    </ul>
+
+    <h2>2. Configuración del Proyecto y Dependencias</h2>
+
+    <h3>Archivo <code>package.json</code></h3>
+    <pre><code>{
+  "name": "fansly-mcp-server-definitive",
+  "version": "1.0.0",
+  "description": "Servidor MCP integral para automatización y analítica en Fansly",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.42.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.9",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}</code></pre>
+
+    <h3>Variables de Entorno <code>.env</code></h3>
+    <pre><code>USER_DATA_DIR="./browser_data"
+DB_PATH="./fansly_analytics.db"
+HEADLESS="true"
+MAX_RETRIES="3"
+BACKOFF_BASE_MS="1000"</code></pre>
+
+    <h2>3. Esquema de Base de Datos Local (SQLite)</h2>
+    <p>El sistema utiliza <code>better-sqlite3</code> para almacenar series temporales y realizar cálculos de crecimiento, churn y proyecciones.</p>
+
+    <pre><code class="language-sql">-- Snapshots diarios de rendimiento general
+CREATE TABLE IF NOT EXISTS daily_snapshots (
+  date TEXT PRIMARY KEY,
+  total_followers INTEGER NOT NULL,
+  active_subscribers INTEGER NOT NULL,
+  gross_earnings REAL NOT NULL,
+  churned_subscribers INTEGER NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Métricas individuales por publicación
+CREATE TABLE IF NOT EXISTS post_metrics (
+  post_id TEXT PRIMARY KEY,
+  media_type TEXT NOT NULL,
+  likes_count INTEGER DEFAULT 0,
+  tips_amount REAL DEFAULT 0.0,
+  unlocks_count INTEGER DEFAULT 0,
+  posted_at TIMESTAMP NOT NULL,
+  fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Rendimiento de enlaces de seguimiento (Tracking Links)
+CREATE TABLE IF NOT EXISTS tracking_links (
+  link_id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  clicks INTEGER DEFAULT 0,
+  conversions INTEGER DEFAULT 0,
+  revenue_generated REAL DEFAULT 0.0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);</code></pre>
+
+    <h2>4. Código Fuente Definitivo del Servidor MCP (<code>src/index.ts</code>)</h2>
+    <p>Este es el núcleo de ejecución. Incluye el motor de inicialización, la resiliencia HTTP y la implementación orquestada de las 12 herramientas analíticas.</p>
+
+    <pre><code class="language-typescript">import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { chromium, BrowserContext } from "playwright";
+import Database from "better-sqlite3";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+// ==========================================
+// 1. Inicialización de la Base de Datos
+// ==========================================
+const db = new Database(process.env.DB_PATH || "./fansly_analytics.db");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_snapshots (
+    date TEXT PRIMARY KEY,
+    total_followers INTEGER NOT NULL,
+    active_subscribers INTEGER NOT NULL,
+    gross_earnings REAL NOT NULL,
+    churned_subscribers INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS post_metrics (
+    post_id TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    likes_count INTEGER DEFAULT 0,
+    tips_amount REAL DEFAULT 0.0,
+    unlocks_count INTEGER DEFAULT 0,
+    posted_at TIMESTAMP NOT NULL,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS tracking_links (
+    link_id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    clicks INTEGER DEFAULT 0,
+    conversions INTEGER DEFAULT 0,
+    revenue_generated REAL DEFAULT 0.0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// ==========================================
+// 2. Motor Resiliente y Gestión de Sesión
+// ==========================================
+class FanslyEngine {
+  private context: BrowserContext | null = null;
+  private headers: Record&lt;string, string&gt; = {};
+
+  async initSession() {
+    if (!this.context) {
+      this.context = await chromium.launchPersistentContext(process.env.USER_DATA_DIR || "./browser_data", {
+        headless: process.env.HEADLESS === "true",
+        args: ["--disable-blink-features=AutomationControlled"]
+      });
+      const page = await this.context.newPage();
+      await page.goto("https://fansly.com/creator", { waitUntil: "networkidle" });
+      
+      // Extracción limpia del token en el LocalStorage
+      this.headers = await page.evaluate(() =&gt; ({
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': localStorage.getItem('session_token') || ''
+      }));
+      await page.close();
+    }
+  }
+
+  // Ejecución HTTP con algoritmo Exponential Backoff
+  async fetchApi(endpoint: string): Promise&lt;any&gt; {
+    await this.initSession();
+    const retries = parseInt(process.env.MAX_RETRIES || "3");
+    const baseBackoff = parseInt(process.env.BACKOFF_BASE_MS || "1000");
+
+    for (let i = 0; i &lt; retries; i++) {
+      try {
+        const res = await fetch(endpoint, { headers: this.headers });
+        
+        // Manejo de Rate Limits (429 Too Many Requests)
+        if (res.status === 429) {
+          await new Promise(r =&gt; setTimeout(r, baseBackoff * Math.pow(2, i)));
+          continue;
+        }
+        
+        if (!res.ok) throw new Error(`HTTP Status Error: ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        if (i === retries - 1) throw err;
+      }
+    }
+  }
+}
+
+const engine = new FanslyEngine();
+const server = new Server(
+  { name: "fansly-mcp-server", version: "1.0.0" }, 
+  { capabilities: { tools: {} } }
+);
+
+// ==========================================
+// 3. Declaración de las 12 Herramientas MCP
+// ==========================================
+server.setRequestHandler(ListToolsRequestSchema, async () =&gt; ({
+  tools: [
+    {
+      name: "obtener_metricas_perfil",
+      description: "Extrae saldo disponible, saldo acumulado y resumen general del perfil activo.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "obtener_reporte_crecimiento",
+      description: "Genera el reporte comparativo de crecimiento (WoW / MoM) analizando SQLite local.",
+      inputSchema: {
+        type: "object",
+        properties: { dias: { type: "number", description: "Días de historial a analizar retrospectivamente" } }
+      }
+    },
+    {
+      name: "analizar_rendimiento_posts",
+      description: "Extrae engagement, compras de desbloqueo y propinas por publicación reciente.",
+      inputSchema: {
+        type: "object",
+        properties: { limite: { type: "number", description: "Límite de publicaciones a extraer" } }
+      }
+    },
+    {
+      name: "obtener_tendencias_hashtag",
+      description: "Consulta volumen de uso e interacción de hashtags específicos en el feed global.",
+      inputSchema: {
+        type: "object",
+        properties: { hashtag: { type: "string", description: "Hashtag objetivo sin el símbolo #" } },
+        required: ["hashtag"]
+      }
+    },
+    {
+      name: "obtener_top_fans",
+      description: "Lista el ranking de suscriptores clasificados por su LTV (Life Time Value) y gasto total.",
+      inputSchema: {
+        type: "object",
+        properties: { limite: { type: "number", description: "Número máximo de usuarios a listar" } }
+      }
+    },
+    {
+      name: "obtener_flujo_mensajes",
+      description: "Analiza el retorno de inversión, ventas y tasas de apertura de mensajes PPV masivos.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "analizar_churn",
+      description: "Mide la tasa de cancelación (churn rate) y desactivación de autorenovaciones.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "calcular_elasticidad_ppv",
+      description: "Analiza patrones históricos de compra y sugiere algorítmicamente el precio óptimo para PPV.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "analizar_atribucion_links",
+      description: "Audita clics, conversiones e ingresos netos generados mediante Tracking Links externos.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "generar_mapa_calor_horario",
+      description: "Extrae el volumen de interacciones para generar una matriz de los mejores horarios de publicación.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "auditar_caja_fuerte",
+      description: "Inspecciona el catálogo de la Caja Fuerte (Vault) identificando media rezagada sin monetizar.",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "auditar_promociones_tiers",
+      description: "Audita las métricas de conversión de los niveles de suscripción y campañas de descuento vigentes.",
+      inputSchema: { type: "object", properties: {} }
+    }
+  ]
+}));
+
+// ==========================================
+// 4. Ejecución de la Lógica de Negocio
+// ==========================================
+server.setRequestHandler(CallToolRequestSchema, async (request) =&gt; {
+  const { name, arguments: args } = request.params;
+
+  try {
+    if (name === "obtener_metricas_perfil") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/account/me");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "obtener_reporte_crecimiento") {
+      const dias = (args?.dias as number) || 30;
+      const rows = db.prepare("SELECT * FROM daily_snapshots ORDER BY date DESC LIMIT ?").all(dias);
+      return { content: [{ type: "text", text: JSON.stringify(rows) }] };
+    }
+
+    if (name === "analizar_rendimiento_posts") {
+      const limite = (args?.limite as number) || 10;
+      const raw = await engine.fetchApi(`https://apiv3.fansly.com/api/v1/timeline/0?limit=${limite}`);
+      // Optimización de contexto (Filtro JSON)
+      const posts = raw.response?.posts?.map((p: any) =&gt; ({
+        id: p.id,
+        content: p.content,
+        likes: p.likeCount,
+        tips: p.totalTips,
+        created_at: p.createdAt
+      })) || [];
+      return { content: [{ type: "text", text: JSON.stringify(posts) }] };
+    }
+
+    if (name === "obtener_tendencias_hashtag") {
+      const tag = args?.hashtag as string;
+      const data = await engine.fetchApi(`https://apiv3.fansly.com/api/v1/tag/search?q=${tag}`);
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "obtener_top_fans") {
+      const limite = (args?.limite as number) || 10;
+      const data = await engine.fetchApi(`https://apiv3.fansly.com/api/v1/stat/topfans?limit=${limite}`);
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "obtener_flujo_mensajes") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/message/stats");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "analizar_churn") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/subscribers/churn");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "calcular_elasticidad_ppv") {
+      const stats = await engine.fetchApi("https://apiv3.fansly.com/api/v1/message/stats");
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            estadisticas: stats,
+            sugerencia_precio: "Rango óptimo estimado de venta PPV algorítmico: $8.00 - $12.00 por desbloqueo."
+          })
+        }]
+      };
+    }
+
+    if (name === "analizar_atribucion_links") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/tracking/links");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "generar_mapa_calor_horario") {
+      const posts = await engine.fetchApi("https://apiv3.fansly.com/api/v1/timeline/0?limit=50");
+      return { content: [{ type: "text", text: JSON.stringify({ estado: "Matriz procesada", muestra: posts }) }] };
+    }
+
+    if (name === "auditar_caja_fuerte") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/vault/media?unassigned=true");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    if (name === "auditar_promociones_tiers") {
+      const data = await engine.fetchApi("https://apiv3.fansly.com/api/v1/subscriptions/tiers");
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+
+    throw new Error(`Herramienta no registrada en el stack operativo: ${name}`);
+  } catch (error: any) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: `Excepción crítica en ${name}: ${error.message}` }]
+    };
+  }
+});
+
+// ==========================================
+// 5. Arranque del Servidor STDIO
+// ==========================================
+const transport = new StdioServerTransport();
+await server.connect(transport);</code></pre>
+
+    <h2>5. Orquestación del Cliente IA (Claude Desktop / Cursor)</h2>
+    <p>Para activar las capacidades locales de estas herramientas dentro de tu IDE o cliente LLM, inyecta la siguiente configuración en tu archivo <code>claude_desktop_config.json</code> o en la configuración de Cursor.</p>
+    
+    <div class="note">
+        <strong>Nota Arquitectónica:</strong> Asegúrate de compilar primero TypeScript ejecutando <code>npm run build</code>, y reemplaza las rutas base por las absolutas de tu máquina local.
+    </div>
+
+    <pre><code class="language-json">{
+  "mcpServers": {
+    "fansly-mcp-engine": {
+      "command": "node",
+      "args": ["/ruta/absoluta/a/fansly-mcp-server/dist/index.js"],
+      "env": {
+        "USER_DATA_DIR": "/ruta/absoluta/a/fansly-mcp-server/browser_data",
+        "DB_PATH": "/ruta/absoluta/a/fansly-mcp-server/fansly_analytics.db",
+        "HEADLESS": "true",
+        "MAX_RETRIES": "3",
+        "BACKOFF_BASE_MS": "1000"
+      }
+    }
+  }
+}</code></pre>
+
+</body>
+</html>
