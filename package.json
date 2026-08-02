@@ -14,6 +14,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node build/index.js",
     "login": "tsx scripts/login.ts",
+    "chrome-cdp": "tsx scripts/chrome-cdp.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import { loadConfig } from "../src/config.js";
+import { CLEAN_SESSION_SCRIPT, readTokenFromStorage } from "../src/engine/session.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -18,19 +19,11 @@ async function main(): Promise<void> {
     headless: false,
   });
   const page = await context.newPage();
+  await page.addInitScript(CLEAN_SESSION_SCRIPT);
   await page.goto("https://fansly.com/creator", { waitUntil: "domcontentloaded" });
   await new Promise<void>((resolve) => {
     const timer = setInterval(async () => {
-      const token = await page.evaluate(() => {
-        const raw = localStorage.getItem("session_active_session") ?? localStorage.getItem("session_token");
-        if (!raw) return "";
-        try {
-          const parsed = JSON.parse(raw);
-          return typeof parsed?.token === "string" ? parsed.token : String(parsed);
-        } catch {
-          return raw;
-        }
-      });
+      const token = await page.evaluate(readTokenFromStorage);
       if (token) {
         clearInterval(timer);
         resolve();

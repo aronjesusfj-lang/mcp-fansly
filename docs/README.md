@@ -14,7 +14,7 @@
 | 1 | [01-arquitectura.md](./01-arquitectura.md) | Diagrama de operación, flujo de datos, principios de seguridad y aislamiento | 1 |
 | 2 | [02-configuracion.md](./02-configuracion.md) | `package.json`, `.env` y dependencias | 2 |
 | 3 | [03-base-de-datos.md](./03-base-de-datos.md) | Esquema SQLite (`daily_snapshots`, `post_metrics`, `tracking_links`) | 3 |
-| 4 | [04-servidor-mcp.md](./04-servidor-mcp.md) | Código fuente `src/index.ts`: motor resiliente, sesión y 12 herramientas | 4 |
+| 4 | [04-servidor-mcp.md](./04-servidor-mcp.md) | Código fuente `src/index.ts`: motor resiliente, sesión y 15 herramientas | 4 |
 | 5 | [05-orquestacion-cliente.md](./05-orquestacion-cliente.md) | Configuración de `claude_desktop_config.json` / Cursor | 5 |
 | 6 | [06-auditoria-1-codigo.md](./06-auditoria-1-codigo.md) | **Auditoría 1:** código y lógica (bugs, mal criterio, código basura) | — |
 | 7 | [07-auditoria-2-arquitectura-seguridad.md](./07-auditoria-2-arquitectura-seguridad.md) | **Auditoría 2:** arquitectura, seguridad y configuración | — |
@@ -36,7 +36,7 @@ El sistema conecta modelos de lenguaje (LLM) con la API interna de Fansly de for
 - **Navegador Chromium persistente** — perfil local en disco (`./browser_data`), extracción de headers y sesión
 - **API interna de Fansly** — `apiv3.fansly.com` (peticiones HTTPS directas, JSON)
 
-**12 herramientas analíticas:**
+**15 herramientas analíticas:**
 1. `verificar_sesion` — comprueba el estado de autenticación
 2. `obtener_metricas_perfil` — seguidores, contenido, tiers y muros desde `/account/me`
 3. `obtener_reporte_crecimiento` — variación WoW / MoM desde SQLite local
@@ -50,6 +50,8 @@ El sistema conecta modelos de lenguaje (LLM) con la API interna de Fansly de for
 11. `generar_mapa_calor_horario` — matriz 7x24 de publicación
 12. `auditar_caja_fuerte` — media del muro desde `/mediaoffers/location`
 13. `auditar_promociones_tiers` — tiers y planes desde `/account/me`
+14. `listar_cuentas` — cuentas configuradas, activa, Chrome en ejecución y sesión
+15. `seleccionar_cuenta` — cambia la cuenta activa (multi-modelo)
 
 ---
 

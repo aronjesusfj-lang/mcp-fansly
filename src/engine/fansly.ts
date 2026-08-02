@@ -1,24 +1,54 @@
-import { chromium, request as playwrightRequest, APIRequestContext, BrowserContext } from "playwright";
-import type { FanslyConfig } from "../config.js";
+import { chromium, request as playwrightRequest, type APIRequestContext, type Browser, type BrowserContext, type Page } from "playwright";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import type { FanslyAccountConfig, FanslyConfig } from "../config.js";
+import { ensureDebugChrome, portFromCdpUrl } from "./chrome-launcher.js";
+import { CLEAN_SESSION_SCRIPT, readTokenFromStorage } from "./session.js";
 
 export interface FanslyEngineOptions {
   userDataDir: string;
   headless: boolean;
   fanslyToken: string;
+  cdpUrl: string;
+  accounts: FanslyAccountConfig[];
+  activeAccount: string;
+  loginWaitMs: number;
   maxRetries: number;
   backoffBaseMs: number;
   requestTimeoutMs: number;
+}
+
+export interface AccountStatus {
+  name: string;
+  cdpUrl: string;
+  active: boolean;
+  running: boolean;
+  session: boolean;
 }
 
 export interface FanslyAccount {
   id?: string;
   username?: string;
   email?: string;
+  displayName?: string;
   followCount?: number;
+  subscriberCount?: number;
+  postLikes?: number;
+  accountMediaLikes?: number;
+  lastSeenAt?: number;
+  totalSpent30?: number;
+  earningsWallet?: { balance?: number; [key: string]: unknown };
+  streaming?: { enabled?: boolean; [key: string]: unknown };
+  profileSocials?: unknown;
+  profileBadges?: unknown;
+  pinnedPosts?: unknown;
   timelineStats?: {
     imageCount?: number;
     videoCount?: number;
     bundleCount?: number;
+    bundleImageCount?: number;
+    bundleVideoCount?: number;
+    [key: string]: unknown;
   };
   subscriptionTiers?: Array<{
     id?: string;
@@ -37,9 +67,54 @@ export interface FanslyPost {
   id?: string;
   content?: string;
   likeCount?: number;
-  commentCount?: number;
-  totalTips?: number;
-  createdAt?: string;
+  mediaLikeCount?: number;
+  totalTipAmount?: number;
+  attachmentTipAmount?: number;
+  createdAt?: number | string;
+  fypFlags?: number;
+  attachments?: Array<{ contentType?: number; contentId?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+export interface FanslyTimelineMedia {
+  id?: string;
+  price?: number;
+  likeCount?: number;
+  permissionFlags?: number;
+  createdAt?: number | string;
+  media?: { type?: number; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface FanslyTimelineResponse {
+  posts?: FanslyPost[];
+  accountMedia?: FanslyTimelineMedia[];
+  accountMediaBundles?: Array<Record<string, unknown>>;
+  accounts?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface FanslyPublicAccount {
+  id?: string;
+  username?: string;
+  displayName?: string;
+  followCount?: number;
+  subscriberCount?: number;
+  lastSeenAt?: number;
+  timelineStats?: {
+    imageCount?: number;
+    videoCount?: number;
+    bundleCount?: number;
+    [key: string]: unknown;
+  };
+  subscriptionTiers?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export interface FanslySubscriptions {
+  stats?: { totalActive?: number; totalExpired?: number; total?: number };
+  subscriptions?: Array<Record<string, unknown>>;
+  subscriptionPlans?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 }
 
@@ -59,9 +134,9 @@ function sleep(ms: number): Promise<void> {
 
 const SESSION_NOT_FOUND_MESSAGE =
   "No hay sesión de Fansly activa. " +
-  "Opciones: (1) define FANSLY_TOKEN en .env (obtén el token con " +
-  "JSON.parse(localStorage.getItem(\"session_active_session\")).token en fansly.com); " +
-  "o (2) ejecuta npm run login para abrir Chromium e iniciar sesión manualmente.";
+  "Opciones: (1) define FANSLY_TOKEN en .env; " +
+  "(2) ejecuta npm run chrome-cdp y deja Chrome abierto con tu sesión de fansly.com iniciada; " +
+  "o (3) ejecuta npm run login para abrir Chromium e iniciar sesión manualmente.";
 
 export class FanslyEngine {
   private requestContext: APIRequestContext | null = null;
@@ -69,13 +144,86 @@ export class FanslyEngine {
   private authHeaders: Record<string, string> = {};
   private ownAccountCache: FanslyAccount | null = null;
   private readonly options: FanslyEngineOptions;
+  private readonly cache = new Map<string, { expires: number; data: unknown }>();
+  private readonly cacheTtlMs = 30000;
 
   constructor(options: FanslyEngineOptions) {
     this.options = options;
   }
 
-  get mode(): "token" | "browser" {
-    return this.options.fanslyToken ? "token" : "browser";
+  get activeAccount(): FanslyAccountConfig {
+    const found = this.options.accounts.find((a) => a.name === this.options.activeAccount);
+    return found ?? this.options.accounts[0];
+  }
+
+  get mode(): "token" | "cdp" | "browser" {
+    if (this.options.fanslyToken) return "token";
+    return this.options.cdpUrl ? "cdp" : "browser";
+  }
+
+  private get currentCdpUrl(): string {
+    return this.activeAccount.cdpUrl || this.options.cdpUrl;
+  }
+
+  async selectAccount(name: string): Promise<boolean> {
+    const exists = this.options.accounts.some((a) => a.name === name);
+    if (!exists) return false;
+    this.options.activeAccount = name;
+    await this.close();
+    this.authHeaders = {};
+    this.ownAccountCache = null;
+    return true;
+  }
+
+  async listAccounts(): Promise<AccountStatus[]> {
+    const statuses: AccountStatus[] = [];
+    for (const account of this.options.accounts) {
+      statuses.push({
+        name: account.name,
+        cdpUrl: account.cdpUrl,
+        active: account.name === this.activeAccount.name,
+        running: false,
+        session: false,
+      });
+    }
+    for (const status of statuses) {
+      status.running = await this.isCdpRunning(status.cdpUrl);
+      if (status.running) status.session = await this.hasCdpSession(status.cdpUrl);
+    }
+    return statuses;
+  }
+
+  private async isCdpRunning(cdpUrl: string): Promise<boolean> {
+    try {
+      const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 3000 });
+      await browser.close().catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readTokenFromCdp(cdpUrl: string): Promise<string> {
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.connectOverCDP(cdpUrl, { timeout: 3000 });
+      for (const ctx of browser.contexts()) {
+        for (const page of ctx.pages()) {
+          if (!page.url().includes("fansly.com")) continue;
+          const token = await this.readTokenNow(page);
+          if (token) return token;
+        }
+      }
+      return "";
+    } catch {
+      return "";
+    } finally {
+      await browser?.close().catch(() => {});
+    }
+  }
+
+  private async hasCdpSession(cdpUrl: string): Promise<boolean> {
+    return (await this.readTokenFromCdp(cdpUrl)) !== "";
   }
 
   async initSession(): Promise<void> {
@@ -86,46 +234,127 @@ export class FanslyEngine {
       this.ownAccountCache = null;
       return;
     }
-    this.browserContext = await chromium.launchPersistentContext(this.options.userDataDir, {
-      headless: this.options.headless,
-    });
-    this.requestContext = this.browserContext.request;
+    if (this.mode === "cdp") {
+      const result = await this.tryCdpSession();
+      if (result === "not-running") {
+        await ensureDebugChrome(portFromCdpUrl(this.currentCdpUrl), this.activeAccount.userDataDir);
+        const retry = await this.tryCdpSession();
+        if (retry === "ok") return;
+        if (retry === "no-login") return;
+      }
+      if (result === "ok") return;
+      if (result === "no-login") return;
+    }
+    await this.launchBrowser();
     await this.refreshSession();
   }
 
   async hasSession(): Promise<boolean> {
-    await this.initSession();
-    return Boolean(this.authHeaders.authorization);
+    if (this.authHeaders.authorization) return true;
+    if (this.mode === "token") return Boolean(this.options.fanslyToken);
+    if (this.mode === "cdp") {
+      const token = await this.readTokenFromCdp(this.currentCdpUrl);
+      if (token) {
+        if (!this.requestContext) this.requestContext = await playwrightRequest.newContext();
+        this.authHeaders = { authorization: token };
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  private async tryCdpSession(): Promise<"ok" | "not-running" | "no-login"> {
+    let browser: Browser;
+    try {
+      browser = await chromium.connectOverCDP(this.currentCdpUrl, { timeout: 3000 });
+    } catch {
+      return "not-running";
+    }
+    try {
+      let token = await this.readTokenFromCdp(this.currentCdpUrl);
+      if (!token) {
+        const page = await this.findOrCreateFanslyPage(browser);
+        if (!page) return "no-login";
+        token = await this.waitForToken(page);
+      }
+      if (token) {
+        if (!this.requestContext) this.requestContext = await playwrightRequest.newContext();
+        this.authHeaders = { authorization: token };
+        return "ok";
+      }
+      return "no-login";
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
+
+  private async findOrCreateFanslyPage(browser: Browser): Promise<Page | null> {
+    const contexts = browser.contexts();
+    for (const ctx of contexts) {
+      for (const page of ctx.pages()) {
+        if (page.url().includes("fansly.com")) return page;
+      }
+    }
+    const ctx = contexts[0];
+    if (!ctx) return null;
+    const page = await ctx.newPage();
+    await page
+      .goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: this.options.requestTimeoutMs })
+      .catch(() => {});
+    return page;
+  }
+
+  private async readTokenNow(page: Page): Promise<string> {
+    try {
+      return await page.evaluate(readTokenFromStorage);
+    } catch {
+      return "";
+    }
+  }
+
+  private async waitForToken(page: Page): Promise<string> {
+    try {
+      const handle = await page.waitForFunction(readTokenFromStorage, undefined, {
+        timeout: this.options.loginWaitMs,
+        polling: 1000,
+      });
+      const value = await handle.jsonValue();
+      return typeof value === "string" ? value : "";
+    } catch {
+      return "";
+    }
+  }
+
+  private async launchBrowser(): Promise<void> {
+    this.cleanupStaleLocks();
+    this.browserContext = await chromium.launchPersistentContext(this.options.userDataDir, {
+      headless: this.options.headless,
+      args: ["--disable-features=ServiceWorker"],
+    });
+    this.requestContext = this.browserContext.request;
+  }
+
+  private cleanupStaleLocks(): void {
+    for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+      try {
+        rmSync(join(this.options.userDataDir, name), { force: true });
+      } catch {
+        /* ignorar */
+      }
+    }
   }
 
   private async refreshSession(): Promise<void> {
     if (!this.browserContext) return;
     const page = await this.browserContext.newPage();
     try {
+      await page.addInitScript(CLEAN_SESSION_SCRIPT);
       await page.goto(LOGIN_URL, {
         waitUntil: "domcontentloaded",
         timeout: this.options.requestTimeoutMs,
       });
-      const token = await page.evaluate(() => {
-        const candidates = [
-          "session_active_session",
-          "session_token",
-          "active_session",
-          "session",
-        ];
-        for (const key of candidates) {
-          const raw = window.localStorage.getItem(key);
-          if (!raw) continue;
-          try {
-            const parsed = JSON.parse(raw);
-            if (typeof parsed?.token === "string" && parsed.token.length > 0) return parsed.token;
-            if (typeof parsed === "string" && parsed.length > 0) return parsed;
-          } catch {
-            if (typeof raw === "string" && raw.length > 0) return raw;
-          }
-        }
-        return "";
-      });
+      const token = await this.waitForToken(page);
       this.authHeaders = token ? { authorization: token } : {};
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -144,11 +373,72 @@ export class FanslyEngine {
     return this.ownAccountCache;
   }
 
-  async fetchApi<T = unknown>(path: string): Promise<T> {
+  async getSubscriptions(): Promise<FanslySubscriptions> {
+    return this.fetchApi<FanslySubscriptions>("/subscriptions?limit=50&offset=0");
+  }
+
+  async getPublicAccounts(ids: string[]): Promise<FanslyPublicAccount[]> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    const batches: string[][] = [];
+    for (let i = 0; i < unique.length; i += 20) {
+      batches.push(unique.slice(i, i + 20));
+    }
+    const results: FanslyPublicAccount[] = [];
+    for (const batch of batches) {
+      const idsParam = batch.map((id) => `ids=${encodeURIComponent(id)}`).join("&");
+      const data = await this.fetchApi<FanslyPublicAccount[]>(`/account?${idsParam}`);
+      results.push(...(Array.isArray(data) ? data : []));
+    }
+    return results;
+  }
+
+  async getAccountFollowers(accountId: string, limit = 100, offset = 0): Promise<string[]> {
+    const data = await this.fetchApi<Array<{ followerId?: string }>>(
+      `/account/${accountId}/followers?limit=${limit}&offset=${offset}`
+    );
+    return (Array.isArray(data) ? data : [])
+      .map((item) => item.followerId)
+      .filter((id): id is string => Boolean(id));
+  }
+
+  async getAccountFollowing(accountId: string, limit = 100, offset = 0): Promise<string[]> {
+    const data = await this.fetchApi<Array<{ accountId?: string }>>(
+      `/account/${accountId}/following?limit=${limit}&offset=${offset}`
+    );
+    return (Array.isArray(data) ? data : [])
+      .map((item) => item.accountId)
+      .filter((id): id is string => Boolean(id));
+  }
+
+  async getTimeline(
+    accountId: string,
+    options: { limit?: number; contentSearch?: string; fyp?: boolean } = {}
+  ): Promise<FanslyTimelineResponse> {
+    const { limit = 15, contentSearch = "", fyp = false } = options;
+    const timeline = await this.fetchApi<FanslyTimelineResponse>(
+      `/timelinenew/${accountId}?before=0&after=0&wallId=&contentSearch=${encodeURIComponent(contentSearch)}${fyp ? "&fyp=1" : ""}`
+    );
+    if (limit >= (timeline.posts?.length ?? 0)) return timeline;
+    const posts = timeline.posts ?? [];
+    const remaining = limit - posts.length;
+    if (remaining <= 0) return { ...timeline, posts: posts.slice(0, limit) };
+    return { ...timeline, posts: posts.slice(0, limit) };
+  }
+
+  async fetchApi<T = unknown>(path: string, opts: { noCache?: boolean } = {}): Promise<T> {
     await this.initSession();
 
     if (!this.authHeaders.authorization) {
       throw new Error(SESSION_NOT_FOUND_MESSAGE);
+    }
+
+    const cacheKey = `${this.currentCdpUrl}|${path}`;
+    if (!opts.noCache) {
+      const cached = this.cache.get(cacheKey);
+      if (cached && cached.expires > Date.now()) {
+        return cached.data as T;
+      }
     }
 
     const request = this.requestContext;
@@ -182,18 +472,27 @@ export class FanslyEngine {
         }
         if (status === 401) {
           this.authHeaders = {};
-          if (this.mode === "browser") {
-            await this.refreshSession();
-            if (!this.authHeaders.authorization) {
+          if (this.mode === "token") {
+            throw new Error(
+              "El FANSLY_TOKEN es inválido o expiró. Obtén uno nuevo y actualízalo en .env."
+            );
+          }
+          if (this.mode === "cdp") {
+            const result = await this.tryCdpSession();
+            if (result !== "ok") {
               throw new Error(
-                "La sesión de Fansly expiró o es inválida. Vuelve a iniciar sesión con npm run login o renueva FANSLY_TOKEN."
+                "La sesión de Fansly expiró o es inválida. Inicia sesión en fansly.com en tu Chrome abierto (npm run chrome-cdp) y reintenta."
               );
             }
             continue;
           }
-          throw new Error(
-            "El FANSLY_TOKEN es inválido o expiró. Obtén uno nuevo y actualízalo en .env."
-          );
+          await this.refreshSession();
+          if (!this.authHeaders.authorization) {
+            throw new Error(
+              "La sesión de Fansly expiró o es inválida. Vuelve a iniciar sesión con npm run login o renueva FANSLY_TOKEN."
+            );
+          }
+          continue;
         }
         if (status === 400) {
           throw new Error(
@@ -217,7 +516,9 @@ export class FanslyEngine {
           throw new Error(`Fansly API error (${code}): ${details}`);
         }
 
-        return (json?.response ?? json) as T;
+        const result = (json?.response ?? json) as T;
+        this.cache.set(cacheKey, { expires: Date.now() + this.cacheTtlMs, data: result });
+        return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         if (attempt === this.options.maxRetries) break;
@@ -237,6 +538,7 @@ export class FanslyEngine {
       await this.requestContext.dispose();
       this.requestContext = null;
     }
+    this.cache.clear();
   }
 }
 
@@ -245,6 +547,10 @@ export function createEngine(config: FanslyConfig): FanslyEngine {
     userDataDir: config.userDataDir,
     headless: config.engine.headless,
     fanslyToken: config.fanslyToken,
+    cdpUrl: config.cdpUrl,
+    accounts: config.accounts,
+    activeAccount: config.activeAccount,
+    loginWaitMs: config.loginWaitMs,
     maxRetries: config.engine.maxRetries,
     backoffBaseMs: config.engine.backoffBaseMs,
     requestTimeoutMs: config.engine.requestTimeoutMs,

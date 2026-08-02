@@ -1,6 +1,6 @@
 # 04. Código Fuente del Servidor MCP (`src/index.ts`)
 
-> **Sección original 4 de `desorden.txt`.** Núcleo de ejecución: motor de inicialización, resiliencia HTTP e implementación orquestada de las 12 herramientas analíticas.
+> **Sección original 4 de `desorden.txt`.** Núcleo de ejecución: motor de inicialización, resiliencia HTTP e implementación orquestada de las 15 herramientas analíticas.
 
 ---
 
@@ -105,7 +105,7 @@ const server = new Server(
 );
 
 // ==========================================
-// 3. Declaración de las 12 Herramientas MCP
+// 3. Declaración de las 13 Herramientas MCP
 // ==========================================
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -318,11 +318,11 @@ await server.connect(transport);
   - En **401** refresca la sesión; en **429/5xx** espera `backoff * 2^i` y reintenta.
   - Valida `success === true` y desempaqueta la clave `response`.
   - Reintenta hasta `MAX_RETRIES` veces; en el último intento relanza.
+### Bloque 3 — Declaración de las 15 herramientas MCP
 
-### Bloque 3 — Declaración de las 12 herramientas MCP
-- `ListToolsRequestSchema`: devuelve el catálogo de 12 herramientas con sus `inputSchema`.
+- `ListToolsRequestSchema`: devuelve el catálogo de 15 herramientas con sus `inputSchema`.
 - Herramientas con parámetros: `obtener_reporte_crecimiento` (`dias`), `analizar_rendimiento_posts` (`limite`), `obtener_tendencias_hashtag` (`hashtag`, requerido), `obtener_top_fans` (`limite`).
-- Herramientas sin parámetros: `obtener_metricas_perfil`, `obtener_flujo_mensajes`, `analizar_churn`, `calcular_elasticidad_ppv`, `analizar_atribucion_links`, `generar_mapa_calor_horario`, `auditar_caja_fuerte`, `auditar_promociones_tiers`.
+- Herramientas sin parámetros: `verificar_sesion`, `obtener_metricas_perfil`, `obtener_flujo_mensajes`, `analizar_churn`, `calcular_elasticidad_ppv`, `analizar_atribucion_links`, `generar_mapa_calor_horario`, `auditar_caja_fuerte`, `auditar_promociones_tiers`.
 
 ### Bloque 4 — Ejecución de la lógica de negocio
 - `CallToolRequestSchema`: despacha por `name` con una cadena de `if`.

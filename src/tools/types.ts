@@ -1,4 +1,3 @@
-import type { McpServer } from "@modelcontextprotocol/server";
 import type { FanslyEngine } from "../engine/fansly.js";
 import type { AnalyticsRepository } from "../db/repository.js";
 
@@ -7,6 +6,14 @@ export interface ToolDeps {
   repository: AnalyticsRepository;
 }
 
-export interface ToolModule {
-  register(server: McpServer, deps: ToolDeps): void;
+export interface MessagingGroup {
+  id?: string;
+  users?: Array<{
+    userId?: string;
+    username?: string;
+    displayName?: string;
+    [key: string]: unknown;
+  }>;
+  lastMessage?: { content?: string; createdAt?: string; [key: string]: unknown };
+  [key: string]: unknown;
 }

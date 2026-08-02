@@ -6,6 +6,11 @@
       "env": {
         "USER_DATA_DIR": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/browser_data",
         "DB_PATH": "/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/fansly_analytics.db",
+        "FANSLY_TOKEN": "",
+        "FANSLY_CDP_URL": "http://127.0.0.1:9222",
+        "FANSLY_ACCOUNTS": "{\"luna\":{\"cdpUrl\":\"http://127.0.0.1:9222\",\"userDataDir\":\"/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/browser_data/luna\"},\"maria\":{\"cdpUrl\":\"http://127.0.0.1:9223\",\"userDataDir\":\"/Users/macos/Desktop/HERRAMIENTAS DE GESTION/EXTENSION-FANSLY/browser_data/maria\"}}",
+        "FANSLY_ACTIVE_ACCOUNT": "luna",
+        "LOGIN_WAIT_MS": "120000",
         "HEADLESS": "false",
         "MAX_RETRIES": "3",
         "BACKOFF_BASE_MS": "1000",

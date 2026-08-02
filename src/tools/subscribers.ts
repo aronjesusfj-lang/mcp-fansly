@@ -1,17 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
-import type { ToolDeps } from "./types.js";
-
-interface MessagingGroup {
-  id?: string;
-  users?: Array<{ userId?: string; username?: string; displayName?: string; [key: string]: unknown }>;
-  lastMessage?: { content?: string; createdAt?: string; [key: string]: unknown };
-  [key: string]: unknown;
-}
-
-function safeText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
+import type { ToolDeps, MessagingGroup } from "./types.js";
+import { safeText } from "./helpers.js";
 
 export function registerSubscribersTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -55,7 +45,7 @@ export function registerSubscribersTools(server: McpServer, deps: ToolDeps): voi
     {
       title: "Análisis de churn",
       description:
-        "Mide la cancelación de suscriptores (churn) a partir de los snapshots diarios registrados en SQLite.",
+        "Mide cancelación de suscriptores combinando subscribers_history real (/subscriptions) y snapshots diarios.",
       inputSchema: z.object({
         dias: z.number().int().min(7).max(365).optional().describe("Días de historial a analizar"),
       }),
@@ -63,47 +53,38 @@ export function registerSubscribersTools(server: McpServer, deps: ToolDeps): voi
     async ({ dias }) => {
       const days = dias ?? 30;
       const rows = deps.repository.getDailySnapshots(days);
+      const subsHistory = deps.repository.getSubscribersHistory(days);
       const churned = rows.reduce((sum, row) => sum + (row.churned_subscribers || 0), 0);
       const total = rows[0]?.total_followers ?? 0;
+
+      let vencidos_recientes = 0;
+      let activos_recientes: number | null = null;
+      if (subsHistory.length > 0) {
+        const primer = subsHistory[subsHistory.length - 1];
+        const ultimo = subsHistory[0];
+        activos_recientes = ultimo.total_active ?? 0;
+        if (primer.total_active > 0) {
+          vencidos_recientes = Math.max(0, primer.total_active - ultimo.total_active);
+        } else {
+          vencidos_recientes = ultimo.total_expired ?? 0;
+        }
+      }
+
       const resumen = {
         dias_analizados: rows.length,
         churn_total_registrado: churned,
+        vencidos_segun_api: vencidos_recientes,
+        suscriptores_activos: activos_recientes,
         seguidores_recientes: total,
+        tasa_churn_pct:
+          activos_recientes && activos_recientes > 0
+            ? Number(((vencidos_recientes / activos_recientes) * 100).toFixed(2))
+            : null,
         notas:
-          rows.length === 0
-            ? "Sin snapshots en SQLite. Ejecuta obtener_metricas_perfil diariamente para acumular historial."
-            : "Churn calculado desde snapshots locales; Fansly no expone cancelaciones vía API.",
+          activos_recientes === null
+            ? "Sin historial real de suscripciones. Ejecuta obtener_suscriptores diariamente."
+            : "Churn calculado con datos reales de /subscriptions.",
       };
-      return {
-        content: [{ type: "text", text: JSON.stringify(resumen) }],
-        structuredContent: resumen,
-      };
-    }
-  );
-
-  server.registerTool(
-    "auditar_promociones_tiers",
-    {
-      title: "Auditoría de tiers y promociones",
-      description:
-        "Audita tiers de suscripción, precios y planes desde el perfil real (account/me).",
-      inputSchema: z.object({}).strict(),
-    },
-    async () => {
-      const account = await deps.engine.getOwnAccount();
-      const tiers = (account.subscriptionTiers ?? []).map((tier) => ({
-        id: tier.id ?? null,
-        nombre: tier.name ?? null,
-        precio_usd: typeof tier.price === "number" ? tier.price / 1000 : null,
-        max_subscriptores: tier.maxSubscribers ?? 0,
-        planes: (tier.plans ?? []).map((plan) => ({
-          id: plan.id ?? null,
-          precio_usd: typeof plan.price === "number" ? plan.price / 1000 : null,
-          ciclo_dias: plan.cycle ?? null,
-          estado: plan.status ?? null,
-        })),
-      }));
-      const resumen = { total_tiers: tiers.length, tiers: tiers };
       return {
         content: [{ type: "text", text: JSON.stringify(resumen) }],
         structuredContent: resumen,
