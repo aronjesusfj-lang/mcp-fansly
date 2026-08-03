@@ -1,6 +1,6 @@
 # 02. Configuración del Proyecto y Dependencias
 
-> **Sección original 2 de `desorden.txt`.** Configuración de proyecto (package.json), variables de entorno y dependencias.
+> **Sección original 2 del documento de especificación inicial** (`desorden.txt`, ya eliminado). Configuración de proyecto (package.json), variables de entorno y dependencias.
 
 ---
 

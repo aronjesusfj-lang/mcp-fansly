@@ -1,6 +1,6 @@
 # 04. Código Fuente del Servidor MCP (`src/index.ts`)
 
-> **Sección original 4 de `desorden.txt`.** Núcleo de ejecución: motor de inicialización, resiliencia HTTP e implementación orquestada de las 15 herramientas analíticas.
+> **Sección original 4 del documento de especificación inicial** (`desorden.txt`, ya eliminado). Núcleo de ejecución: motor de inicialización, resiliencia HTTP e implementación orquestada de las herramientas analíticas (12–15 en el documento original; 49 en la implementación actual).
 
 ---
 

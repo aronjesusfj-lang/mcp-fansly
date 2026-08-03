@@ -1,6 +1,6 @@
 # 03. Esquema de Base de Datos Local (SQLite)
 
-> **Sección original 3 de `desorden.txt`.** El sistema utiliza `better-sqlite3` para almacenar series temporales y realizar cálculos de crecimiento, churn y proyecciones.
+> **Sección original 3 del documento de especificación inicial** (`desorden.txt`, ya eliminado). El sistema utiliza `better-sqlite3` para almacenar series temporales y realizar cálculos de crecimiento, churn y proyecciones.
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **Propósito:** detección de bugs, mal criterio, configuraciones deficientes y código basura en el código fuente del servidor MCP, con correcciones siguiendo buenas prácticas de programación.
 >
-> **Método:** revisión sistemática línea por línea del archivo `src/index.ts` (Sección 4 de `desorden.txt`) y su interacción con la base de datos (Sección 3) y la configuración (Sección 2).
+> **Método:** revisión sistemática línea por línea del archivo `src/index.ts` (Sección 4 del documento original, ya eliminado) y su interacción con la base de datos (Sección 3) y la configuración (Sección 2).
 
 ---
 

@@ -30,7 +30,7 @@ Un servidor MCP expone **tres bloques de construcción**:
 
 | ID | Requisito oficial | Estado | Detalle / corrección |
 |----|-------------------|--------|----------------------|
-| **C1** | Usar el SDK recomendado: paquete `@modelcontextprotocol/server` con la clase `McpServer` y `server.registerTool(name, { description, inputSchema: z.object(...) }, handler)` | ❌ No cumple | `desorden.txt` usa `@modelcontextprotocol/sdk` (API antigua `Server` + `setRequestHandler`). La guía 2026-07-28 instala `@modelcontextprotocol/server` + `zod`. |
+| **C1** | Usar el SDK recomendado: paquete `@modelcontextprotocol/server` con la clase `McpServer` y `server.registerTool(name, { description, inputSchema: z.object(...) }, handler)` | ❌ No cumple | El documento original (ya eliminado) usa `@modelcontextprotocol/sdk` (API antigua `Server` + `setRequestHandler`). La guía 2026-07-28 instala `@modelcontextprotocol/server` + `zod`. |
 | **C2** | Tener `tsconfig.json` con: `target: ES2022`, `module: Node16`, `moduleResolution: Node16`, `types: ["node"]`, `outDir: ./build`, `rootDir: ./src`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames` | ❌ No cumple | No existe `tsconfig.json` en el original. |
 | **C3** | `package.json`: `"type": "module"`, `"bin"`, script `"build": "tsc && chmod 755 build/index.js"`, `"files": ["build"]` | ⚠️ Parcial | `"type": "module"` ✅; falta `bin`, `files`, y `build` usa salida `dist/` inconsistente. |
 | **C4** | Patrón de arranque `main()` con `try/catch` y `process.exit(1)` | ❌ No cumple | El original usa `await server.connect(transport)` a nivel raíz sin manejo de errores fatales. |
@@ -76,7 +76,7 @@ Un servidor MCP expone **tres bloques de construcción**:
 
 ## 8.4. Conclusión de la verificación
 
-**La estructura de `desorden.txt` NO está construida conforme a la documentación oficial actual de MCP (2026-07-28).** Cumple parcialmente con los conceptos (transporte STDIO, tools, `isError`), pero falla en:
+**La estructura del documento original (`desorden.txt`, ya eliminado) NO está construida conforme a la documentación oficial actual de MCP (2026-07-28).** Cumple parcialmente con los conceptos (transporte STDIO, tools, `isError`), pero falla en:
 
 1. **SDK y API de registro** (C1) — usa la API antigua.
 2. **Configuración de compilación** (C2, C3) — sin `tsconfig.json`, salidas inconsistentes.
@@ -94,8 +94,8 @@ El proyecto raíz contiene los archivos de referencia construidos según la doc 
 
 ```
 EXTENSION-FANSLY/
-├── desorden.txt                  # Documento original (intacto)
 ├── docs/                         # Documentación separada + auditorías + conformidad
+│                                 # (el documento original desorden.txt fue eliminado tras migrarse aquí)
 ├── package.json                  # Nuevo: @modelcontextprotocol/server, zod, bin, build
 ├── tsconfig.json                 # Nuevo: opciones oficiales (ES2022, Node16, strict)
 ├── .env.example                  # Nuevo: variables documentadas

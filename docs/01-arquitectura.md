@@ -1,6 +1,6 @@
 # 01. Arquitectura del Sistema e Infraestructura de Seguridad
 
-> **Sección original 1 de `desorden.txt`.** Esta especificación técnica constituye el manual completo de ingeniería, arquitectura, base de datos e implementación para el servidor **Model Context Protocol (MCP)** de Fansly. El sistema conecta modelos de lenguaje (LLM) con la API interna de Fansly de forma 100% local, utilizando un motor de resiliencia HTTP sobre Playwright y una base de datos SQLite para análisis de series temporales.
+> **Sección original 1 del documento de especificación inicial** (`desorden.txt`, ya eliminado). Esta especificación técnica constituye el manual completo de ingeniería, arquitectura, base de datos e implementación para el servidor **Model Context Protocol (MCP)** de Fansly. El sistema conecta modelos de lenguaje (LLM) con la API interna de Fansly de forma 100% local, utilizando un motor de resiliencia HTTP sobre Playwright y una base de datos SQLite para análisis de series temporales.
 
 ---
 

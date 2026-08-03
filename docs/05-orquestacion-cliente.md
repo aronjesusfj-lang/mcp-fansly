@@ -1,6 +1,6 @@
 # 05. Orquestación del Cliente IA (Claude Desktop / Cursor)
 
-> **Sección original 5 de `desorden.txt`.** Para activar las capacidades locales de estas herramientas dentro de tu IDE o cliente LLM, inyecta la siguiente configuración en tu archivo `claude_desktop_config.json` o en la configuración de Cursor.
+> **Sección original 5 del documento de especificación inicial** (`desorden.txt`, ya eliminado). Para activar las capacidades locales de estas herramientas dentro de tu IDE o cliente LLM, inyecta la siguiente configuración en tu archivo `claude_desktop_config.json` o en la configuración de Cursor.
 
 ---
 

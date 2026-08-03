@@ -5,20 +5,20 @@ Consulta la API real de Fansly con tu propia sesión (token, Chrome CDP o perfil
 **Requiere:** Node.js ≥ 20 · sesión de Fansly
 
 ## Features
-| Herramienta | Comportamiento clave |
-|---|---|
-| `obtener_metricas_perfil` | seguidores, contenido, tiers (÷1000=USD), muros desde `/account/me` |
-| `verificar_sesion` | estado de auth + cuenta activa y cuentas configuradas |
-| `listar_cuentas` / `seleccionar_cuenta` | multi-modelo: estado y conmutación de cuentas CDP |
-| `analizar_rendimiento_posts` | likes/comentarios/propinas del timeline, persiste en SQLite |
-| `obtener_tendencias_hashtag` | interacción acumulada por `contentSearch` |
-| `generar_mapa_calor_horario` | matriz 7×24 de volumen de publicaciones |
-| `obtener_top_fans` / `obtener_flujo_mensajes` | fans con chat activo + propinas en mensajes |
-| `analizar_churn` / `obtener_reporte_crecimiento` | WoW/MoM y cancelaciones desde snapshots SQLite |
-| `calcular_elasticidad_ppv` / `analizar_atribucion_links` | precio sugerido e ingresos por post desde SQLite |
-| `auditar_caja_fuerte` / `auditar_promociones_tiers` | tipos de media del muro y tiers/planes |
+**49 herramientas MCP**, agrupadas por dominio:
 
-**Recursos:** `fansly://resumen`, `fansly://metricas/{fecha}` · **Prompts:** `auditar-perfil`, `analizar-contenido-rezagado`
+| Dominio | Herramientas |
+|---|---|
+| Perfil y sesión | `verificar_sesion`, `obtener_metricas_perfil`, `listar_cuentas`, `seleccionar_cuenta` |
+| Métricas e ingresos | `obtener_suscriptores`, `obtener_reporte_crecimiento`, `pronostico_crecimiento`, `reporte_ingresos`, `tasa_conversion_audiencia`, `alertas_recesion`, `auditar_promociones_tiers`, `analizar_churn`, `obtener_top_fans` |
+| Posts y contenido | `analizar_rendimiento_posts`, `analizar_post`, `curva_vida_post`, `top_bottom_posts`, `ranking_posts`, `analizar_hashtags`, `obtener_tendencias_hashtag`, `generar_mapa_calor_horario`, `horarios_publicacion`, `interaccion_contenido`, `tracker_fyp`, `optimizador_fyp` |
+| Mensajería y PPV | `obtener_flujo_mensajes`, `ranking_fans_gasteros`, `metricas_mensajeria`, `correlacion_mensajes_posts`, `calcular_elasticidad_ppv`, `sugerencia_ppv_tipo` |
+| Tracking y vault | `registrar_link_tracking`, `registrar_click_link`, `analizar_atribucion_links`, `auditar_caja_fuerte`, `contenido_rezagado` |
+| Competencia | `descubrir_competidores`, `registrar_competidor`, `eliminar_competidor`, `snapshot_competidores`, `clasificar_competidores`, `benchmark_competencia`, `analizar_crecimiento_competencia`, `alertas_competencia`, `scoreboard_general`, `benchmark_hashtags`, `copy_competidores`, `monitor_fyp_competitivo` |
+| Orquestación | `snapshot_diario` (pipeline completo + scheduler opcional con `SNAPSHOT_INTERVAL_MS`) |
+
+**Recursos:** `fansly://resumen`, `fansly://metricas/{fecha}`, `fansly://post/{postId}`, `fansly://competidores`, `fansly://hashtags`
+**Prompts:** `auditar-perfil`, `analizar-contenido-rezagado`, `dashboard-semanal`, `plan-contenido-semanal`, `auditoria-competencia`, `analisis-post-profundo`
 
 ## Setup
 ```bash
@@ -42,7 +42,7 @@ src/
   engine/chrome-launcher.ts → Chrome CDP multi-perfil (compartido con scripts/)
   engine/session.ts  → token/sesión (readTokenFromStorage, CLEAN_SESSION_SCRIPT)
   db/repository.ts   → SQLite (WAL, migraciones, upserts)
-  tools/             → 15 herramientas MCP (+ helpers.ts, types.ts)
+  tools/             → 49 herramientas MCP (+ helpers.ts, types.ts)
   resources/ prompts/ → recursos y prompts
 scripts/login.ts     → auth manual en Chromium persistente
 docs/                → documentación técnica (índice: docs/README.md)

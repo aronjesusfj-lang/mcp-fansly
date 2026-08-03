@@ -34,7 +34,7 @@ test:       (no hay suite de tests)
 ```
 
 ## Gotchas críticos
-- Hay **15 herramientas** (no 13): actualizar conteos en docs/README.md al añadir/eliminar tools
+- Hay **49 herramientas**: actualizar conteos en README.md y docs/README.md al añadir/eliminar tools
 - NO commitear `.env`, `browser_data/` ni `*.db*` (token y sesión = secretos)
 - Token de sesión: `JSON.parse(localStorage.getItem("session_active_session")).token`
 - Smoke test STDIO: `printf '{"jsonrpc":"2.0","id":1,"method":"initialize",...}' | node build/index.js` → `"serverInfo":{"name":"fansly-mcp"}`

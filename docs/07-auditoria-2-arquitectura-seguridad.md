@@ -2,7 +2,7 @@
 
 > **Propósito:** detección de mal criterio de arquitectura, riesgos de seguridad, contradicciones de configuración y aspectos de diseño que comprometen la robustez y la confidencialidad del servidor MCP de Fansly.
 >
-> **Método:** análisis de la documentación completa (Secciones 1–5 de `desorden.txt`): diagrama, principios de seguridad, `.env`, `package.json`, `claude_desktop_config.json` e integración Playwright/SQLite.
+> **Método:** análisis de la documentación completa (Secciones 1–5 del documento original, ya eliminado): diagrama, principios de seguridad, `.env`, `package.json`, `claude_desktop_config.json` e integración Playwright/SQLite.
 
 ---
 
