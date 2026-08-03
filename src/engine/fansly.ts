@@ -176,30 +176,36 @@ export class FanslyEngine {
   }
 
   async listAccounts(): Promise<AccountStatus[]> {
-    const statuses: AccountStatus[] = [];
-    for (const account of this.options.accounts) {
-      statuses.push({
-        name: account.name,
-        cdpUrl: account.cdpUrl,
-        active: account.name === this.activeAccount.name,
-        running: false,
-        session: false,
-      });
-    }
-    for (const status of statuses) {
-      status.running = await this.isCdpRunning(status.cdpUrl);
-      if (status.running) status.session = await this.hasCdpSession(status.cdpUrl);
-    }
-    return statuses;
+    return Promise.all(
+      this.options.accounts.map(async (account) => {
+        const probe = await this.probeCdpAccount(account.cdpUrl);
+        return {
+          name: account.name,
+          cdpUrl: account.cdpUrl,
+          active: account.name === this.activeAccount.name,
+          running: probe.running,
+          session: probe.session,
+        };
+      })
+    );
   }
 
-  private async isCdpRunning(cdpUrl: string): Promise<boolean> {
+  private async probeCdpAccount(cdpUrl: string): Promise<{ running: boolean; session: boolean }> {
+    let browser: Browser | null = null;
     try {
-      const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 3000 });
-      await browser.close().catch(() => {});
-      return true;
+      browser = await chromium.connectOverCDP(cdpUrl, { timeout: 3000 });
+      for (const ctx of browser.contexts()) {
+        for (const page of ctx.pages()) {
+          if (!page.url().includes("fansly.com")) continue;
+          const token = await this.readTokenNow(page);
+          if (token) return { running: true, session: true };
+        }
+      }
+      return { running: true, session: false };
     } catch {
-      return false;
+      return { running: false, session: false };
+    } finally {
+      await browser?.close().catch(() => {});
     }
   }
 
@@ -416,14 +422,42 @@ export class FanslyEngine {
     options: { limit?: number; contentSearch?: string; fyp?: boolean } = {}
   ): Promise<FanslyTimelineResponse> {
     const { limit = 15, contentSearch = "", fyp = false } = options;
-    const timeline = await this.fetchApi<FanslyTimelineResponse>(
-      `/timelinenew/${accountId}?before=0&after=0&wallId=&contentSearch=${encodeURIComponent(contentSearch)}${fyp ? "&fyp=1" : ""}`
-    );
-    if (limit >= (timeline.posts?.length ?? 0)) return timeline;
-    const posts = timeline.posts ?? [];
-    const remaining = limit - posts.length;
-    if (remaining <= 0) return { ...timeline, posts: posts.slice(0, limit) };
-    return { ...timeline, posts: posts.slice(0, limit) };
+    const collected: FanslyPost[] = [];
+    const merged: FanslyTimelineResponse = {};
+    let before = 0;
+    const maxPages = 5;
+
+    for (let page = 0; page < maxPages; page++) {
+      const chunk = await this.fetchApi<FanslyTimelineResponse>(
+        `/timelinenew/${accountId}?before=${before}&after=0&wallId=&contentSearch=${encodeURIComponent(contentSearch)}${fyp ? "&fyp=1" : ""}`
+      );
+      const posts = chunk.posts ?? [];
+      if (page === 0) {
+        merged.accountMedia = chunk.accountMedia;
+        merged.accountMediaBundles = chunk.accountMediaBundles;
+        merged.accounts = chunk.accounts;
+      }
+      collected.push(...posts);
+      if (collected.length >= limit || posts.length === 0) break;
+      const oldest = posts[posts.length - 1]?.createdAt;
+      const cursor = typeof oldest === "number" ? oldest : Number(oldest);
+      if (!Number.isFinite(cursor) || cursor <= 0 || cursor === before) break;
+      before = cursor;
+    }
+
+    return { ...merged, posts: collected.slice(0, limit) };
+  }
+
+  async getPostById(postId: string): Promise<FanslyPost | null> {
+    try {
+      const data = await this.fetchApi<{ post?: FanslyPost } | FanslyPost>(
+        `/posts/${encodeURIComponent(postId)}`
+      );
+      const post = (data as { post?: FanslyPost }).post ?? (data as FanslyPost);
+      return post && typeof post === "object" ? post : null;
+    } catch {
+      return null;
+    }
   }
 
   async fetchApi<T = unknown>(path: string, opts: { noCache?: boolean } = {}): Promise<T> {

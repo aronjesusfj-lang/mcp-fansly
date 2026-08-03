@@ -1,4 +1,4 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { ResourceTemplate, type McpServer } from "@modelcontextprotocol/server";
 import type { AnalyticsRepository } from "../db/repository.js";
 
 export function registerResources(server: McpServer, repository: AnalyticsRepository): void {
@@ -62,7 +62,7 @@ export function registerResources(server: McpServer, repository: AnalyticsReposi
       const raw = variables["postId"];
       const postId = Array.isArray(raw) ? raw[0] : raw;
       const history = repository.getPostMetricHistory(postId ?? "");
-      const postMetrics = repository.getPostMetrics(1000).find((p) => p.post_id === postId);
+      const postMetrics = repository.getPostMetricById(postId ?? "");
       return {
         contents: [
           {

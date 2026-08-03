@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolDeps } from "./types.js";
-import { toIso, toNumber } from "./helpers.js";
+import { firstPositiveNumber, resolveMediaType, toIso, toNumber } from "./helpers.js";
 
 interface VaultMediaResponse {
   data?: Array<{
@@ -10,6 +10,10 @@ interface VaultMediaResponse {
     price?: number;
     likeCount?: number;
     permissionFlags?: number;
+    unlockCount?: number;
+    unlocks?: number;
+    purchaseCount?: number;
+    purchases?: number;
     createdAt?: number | string;
     media?: { type?: number; [key: string]: unknown };
     [key: string]: unknown;
@@ -17,19 +21,11 @@ interface VaultMediaResponse {
   [key: string]: unknown;
 }
 
-const CONTENT_TYPES: Record<number, string> = {
-  0: "texto",
-  1: "imagen",
-  2: "video",
-  3: "audio",
-};
-
 function resolveType(item: Record<string, unknown>): string {
   if (typeof item.mediaType === "string" && item.mediaType.length > 0) {
     return item.mediaType;
   }
-  const media = (item.media ?? {}) as { type?: number };
-  return CONTENT_TYPES[toNumber(media.type)] ?? "desconocido";
+  return resolveMediaType(item.media as { type?: unknown } | undefined);
 }
 
 export function registerVaultTools(server: McpServer, deps: ToolDeps): void {
@@ -51,12 +47,19 @@ export function registerVaultTools(server: McpServer, deps: ToolDeps): void {
       const items = media.map((item) => {
         const tipo = resolveType(item);
         const precio = toNumber(item.price);
+        const desbloqueos = firstPositiveNumber(
+          item.unlockCount,
+          item.unlocks,
+          item.purchaseCount,
+          item.purchases
+        );
         deps.repository.upsertVaultMedia({
           media_id: safeId(item.id),
           media_type: tipo,
           price: precio,
           permission_flags: toNumber(item.permissionFlags),
           likes: toNumber(item.likeCount),
+          unlocks: desbloqueos,
           posted_at: toIso(item.createdAt) ?? new Date().toISOString(),
         });
         return {
@@ -64,6 +67,7 @@ export function registerVaultTools(server: McpServer, deps: ToolDeps): void {
           tipo,
           precio,
           likes: toNumber(item.likeCount),
+          desbloqueos,
         };
       });
 
@@ -109,6 +113,7 @@ export function registerVaultTools(server: McpServer, deps: ToolDeps): void {
           media_id: item.media_id,
           tipo: item.media_type,
           likes: item.likes,
+          desbloqueos: item.unlocks,
           precio: item.price,
           publicado: item.posted_at?.slice(0, 10),
         })),

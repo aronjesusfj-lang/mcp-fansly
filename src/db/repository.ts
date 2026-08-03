@@ -60,6 +60,7 @@ export interface VaultMediaRow {
   price: number;
   permission_flags: number;
   likes: number;
+  unlocks: number;
   posted_at: string;
 }
 
@@ -118,7 +119,7 @@ export interface FypTrackerRow {
 
 type Db = InstanceType<typeof Database>;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export class AnalyticsRepository {
   private db: Db;
@@ -162,7 +163,6 @@ export class AnalyticsRepository {
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
       `);
-      this.db.pragma("user_version = 1");
     }
 
     if (version < 2) {
@@ -282,9 +282,23 @@ export class AnalyticsRepository {
       if (!trackingColNames.has("post_id")) {
         this.db.exec("ALTER TABLE tracking_links ADD COLUMN post_id TEXT DEFAULT ''");
       }
-
-      this.db.pragma("user_version = 2");
     }
+
+    if (version < 3) {
+      const vaultColumns = this.db.pragma("table_info(media_vault)") as Array<{ name: string }>;
+      const vaultColNames = new Set(vaultColumns.map((c) => c.name));
+      if (!vaultColNames.has("unlocks")) {
+        this.db.exec("ALTER TABLE media_vault ADD COLUMN unlocks INTEGER DEFAULT 0");
+      }
+    }
+
+    if (version < SCHEMA_VERSION) {
+      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    }
+  }
+
+  runInTransaction(work: () => void): void {
+    this.db.transaction(work)();
   }
 
   upsertDailySnapshot(snapshot: Omit<DailySnapshot, "created_at">): void {
@@ -296,8 +310,8 @@ export class AnalyticsRepository {
          ON CONFLICT(date) DO UPDATE SET
            total_followers = excluded.total_followers,
            active_subscribers = excluded.active_subscribers,
-           gross_earnings = daily_snapshots.gross_earnings + excluded.gross_earnings,
-           churned_subscribers = daily_snapshots.churned_subscribers + excluded.churned_subscribers`
+           gross_earnings = excluded.gross_earnings,
+           churned_subscribers = excluded.churned_subscribers`
       )
       .run(snapshot);
   }
@@ -330,6 +344,16 @@ export class AnalyticsRepository {
       )
       .all(limit) as PostMetrics[];
     return rows;
+  }
+
+  getPostMetricById(postId: string): PostMetrics | null {
+    const row = this.db
+      .prepare(
+        `SELECT post_id, media_type, likes_count, media_likes_count, tips_amount, unlocks_count, posted_at, fetched_at
+         FROM post_metrics WHERE post_id = ?`
+      )
+      .get(postId) as PostMetrics | undefined;
+    return row ?? null;
   }
 
   upsertPostMetricHistory(row: Omit<PostMetricHistoryRow, never>): void {
@@ -422,8 +446,8 @@ export class AnalyticsRepository {
   upsertVaultMedia(row: Omit<VaultMediaRow, never>): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO media_vault (media_id, media_type, price, permission_flags, likes, posted_at)
-         VALUES (@media_id, @media_type, @price, @permission_flags, @likes, @posted_at)`
+        `INSERT OR REPLACE INTO media_vault (media_id, media_type, price, permission_flags, likes, unlocks, posted_at)
+         VALUES (@media_id, @media_type, @price, @permission_flags, @likes, @unlocks, @posted_at)`
       )
       .run(row);
   }
@@ -431,7 +455,7 @@ export class AnalyticsRepository {
   getVaultMedia(): VaultMediaRow[] {
     const rows = this.db
       .prepare(
-        `SELECT media_id, media_type, price, permission_flags, likes, posted_at
+        `SELECT media_id, media_type, price, permission_flags, likes, unlocks, posted_at
          FROM media_vault ORDER BY posted_at DESC`
       )
       .all() as VaultMediaRow[];
@@ -540,6 +564,16 @@ export class AnalyticsRepository {
     return rows;
   }
 
+  getLatestCompetitorSnapshots(accountId: string, limit: number): CompetitorSnapshotRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT account_id, date, follow_count, subscriber_count, image_count, video_count, bundle_count
+         FROM competitor_snapshots WHERE account_id = ? ORDER BY date DESC LIMIT ?`
+      )
+      .all(accountId, limit) as CompetitorSnapshotRow[];
+    return rows.reverse();
+  }
+
   upsertCompetitorHashtag(accountId: string, hashtag: string, date: string, frequency: number): void {
     this.db
       .prepare(
@@ -556,6 +590,16 @@ export class AnalyticsRepository {
          FROM competitor_hashtags WHERE account_id = ? GROUP BY hashtag ORDER BY frequency DESC`
       )
       .all(accountId) as Array<{ hashtag: string; frequency: number }>;
+    return rows;
+  }
+
+  getCompetitorHashtagTrends(sinceDate: string): Array<{ hashtag: string; date: string; frequency: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT hashtag, date, SUM(frequency) as frequency
+         FROM competitor_hashtags WHERE date >= ? GROUP BY hashtag, date ORDER BY date ASC`
+      )
+      .all(sinceDate) as Array<{ hashtag: string; date: string; frequency: number }>;
     return rows;
   }
 

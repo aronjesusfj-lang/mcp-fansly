@@ -1,19 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolDeps } from "./types.js";
-import { parseHashtags, toNumber } from "./helpers.js";
-import type { FanslyPost, FanslyTimelineMedia } from "../engine/fansly.js";
-
-const CONTENT_TYPES: Record<number, string> = {
-  0: "texto",
-  1: "imagen",
-  2: "video",
-  3: "audio",
-};
-
-function resolveType(item: FanslyTimelineMedia): string {
-  return CONTENT_TYPES[toNumber(item.media?.type)] ?? "desconocido";
-}
+import { firstPositiveNumber, parseHashtags, resolveMediaType, toNumber } from "./helpers.js";
+import type { FanslyPost } from "../engine/fansly.js";
 
 export function registerSnapshotTool(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -61,7 +50,7 @@ export function registerSnapshotTool(server: McpServer, deps: ToolDeps): void {
       const mediaTypes = new Map<string, string>();
       for (const item of timeline.accountMedia ?? []) {
         const id = typeof item.id === "string" ? item.id : "";
-        if (id) mediaTypes.set(id, resolveType(item));
+        if (id) mediaTypes.set(id, resolveMediaType(item.media));
       }
 
       const posts = (timeline.posts ?? []).map((post: FanslyPost) => ({
@@ -82,49 +71,63 @@ export function registerSnapshotTool(server: McpServer, deps: ToolDeps): void {
               : new Date().toISOString(),
       }));
 
-      for (const post of posts) {
-        deps.repository.upsertPostMetrics({
-          post_id: post.id,
-          media_type: post.content_type,
-          likes_count: post.likes,
-          media_likes_count: post.media_likes,
-          tips_amount: post.tips,
-          unlocks_count: 0,
-          posted_at: post.created_at,
-        });
-        deps.repository.upsertPostMetricHistory({
-          post_id: post.id,
-          date: today,
-          likes_count: post.likes,
-          media_likes_count: post.media_likes,
-          tips_amount: post.tips,
-          unlocks_count: 0,
-          content_type: post.content_type,
-        });
-        deps.repository.upsertPostHistory({
-          post_id: post.id,
-          status: "activo",
-          first_seen: today,
-        });
-        deps.repository.upsertFypTracker({
-          post_id: post.id,
-          date: today,
-          fyp_flags: post.fyp_flags,
-          likes: post.likes,
-          media_likes: post.media_likes,
-          tips: post.tips,
-        });
-        for (const tag of post.hashtags) {
-          deps.repository.upsertHashtagMetric({
-            hashtag: tag,
+      const tipsHoy = posts
+        .filter((post) => post.created_at.slice(0, 10) === today)
+        .reduce((sum, post) => sum + post.tips, 0);
+      const walletBalance = toNumber(account.earningsWallet?.balance);
+      deps.repository.upsertEarnings({
+        date: today,
+        tips_total: tipsHoy,
+        subs_income: 0,
+        ppv_income: 0,
+        wallet_balance: walletBalance,
+      });
+
+      deps.repository.runInTransaction(() => {
+        for (const post of posts) {
+          deps.repository.upsertPostMetrics({
+            post_id: post.id,
+            media_type: post.content_type,
+            likes_count: post.likes,
+            media_likes_count: post.media_likes,
+            tips_amount: post.tips,
+            unlocks_count: 0,
+            posted_at: post.created_at,
+          });
+          deps.repository.upsertPostMetricHistory({
+            post_id: post.id,
             date: today,
-            post_count: 1,
+            likes_count: post.likes,
+            media_likes_count: post.media_likes,
+            tips_amount: post.tips,
+            unlocks_count: 0,
+            content_type: post.content_type,
+          });
+          deps.repository.upsertPostHistory({
+            post_id: post.id,
+            status: "activo",
+            first_seen: today,
+          });
+          deps.repository.upsertFypTracker({
+            post_id: post.id,
+            date: today,
+            fyp_flags: post.fyp_flags,
             likes: post.likes,
             media_likes: post.media_likes,
             tips: post.tips,
           });
+          for (const tag of post.hashtags) {
+            deps.repository.upsertHashtagMetric({
+              hashtag: tag,
+              date: today,
+              post_count: 1,
+              likes: post.likes,
+              media_likes: post.media_likes,
+              tips: post.tips,
+            });
+          }
         }
-      }
+      });
 
       let vault = 0;
       try {
@@ -141,6 +144,12 @@ export function registerSnapshotTool(server: McpServer, deps: ToolDeps): void {
             price: toNumber(item.price),
             permission_flags: toNumber(item.permissionFlags),
             likes: toNumber(item.likeCount),
+            unlocks: firstPositiveNumber(
+              item.unlockCount,
+              item.unlocks,
+              item.purchaseCount,
+              item.purchases
+            ),
             posted_at:
               typeof item.createdAt === "number"
                 ? new Date(item.createdAt * 1000).toISOString()
