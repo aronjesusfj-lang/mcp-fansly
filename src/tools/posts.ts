@@ -2,14 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolDeps } from "./types.js";
 import type { FanslyPost, FanslyTimelineMedia, FanslyTimelineResponse } from "../engine/fansly.js";
-import { parseHashtags, safeText, toIso, toNumber } from "./helpers.js";
-
-const CONTENT_TYPES: Record<number, string> = {
-  0: "texto",
-  1: "imagen",
-  2: "video",
-  3: "audio",
-};
+import { analyzeCopy, parseHashtags, resolveMediaType, safeText, toIso, toNumber } from "./helpers.js";
 
 const ATTACHMENT_KINDS: Record<number, string> = {
   1: "media",
@@ -22,8 +15,8 @@ function mediaTypeMap(media: FanslyTimelineMedia[]): Map<string, string> {
   for (const item of media) {
     const id = safeText(item.id);
     if (!id) continue;
-    const type = CONTENT_TYPES[toNumber(item.media?.type)];
-    if (type) map.set(id, type);
+    const type = resolveMediaType(item.media);
+    if (type !== "desconocido") map.set(id, type);
   }
   return map;
 }
@@ -186,39 +179,41 @@ async function fetchTimeline(deps: ToolDeps, contentSearch = "", fyp = false): P
 
 function persistSnapshot(deps: ToolDeps, posts: MappedPost[]): void {
   const today = new Date().toISOString().slice(0, 10);
-  for (const post of posts) {
-    deps.repository.upsertPostMetrics({
-      post_id: post.id,
-      media_type: post.content_type,
-      likes_count: post.likes,
-      media_likes_count: post.media_likes,
-      tips_amount: post.tips,
-      unlocks_count: 0,
-      posted_at: post.created_at ?? new Date().toISOString(),
-    });
-    deps.repository.upsertPostMetricHistory({
-      post_id: post.id,
-      date: today,
-      likes_count: post.likes,
-      media_likes_count: post.media_likes,
-      tips_amount: post.tips,
-      unlocks_count: 0,
-      content_type: post.content_type,
-    });
-    deps.repository.upsertPostHistory({
-      post_id: post.id,
-      status: "activo",
-      first_seen: today,
-    });
-    deps.repository.upsertFypTracker({
-      post_id: post.id,
-      date: today,
-      fyp_flags: post.fyp_flags,
-      likes: post.likes,
-      media_likes: post.media_likes,
-      tips: post.tips,
-    });
-  }
+  deps.repository.runInTransaction(() => {
+    for (const post of posts) {
+      deps.repository.upsertPostMetrics({
+        post_id: post.id,
+        media_type: post.content_type,
+        likes_count: post.likes,
+        media_likes_count: post.media_likes,
+        tips_amount: post.tips,
+        unlocks_count: 0,
+        posted_at: post.created_at ?? new Date().toISOString(),
+      });
+      deps.repository.upsertPostMetricHistory({
+        post_id: post.id,
+        date: today,
+        likes_count: post.likes,
+        media_likes_count: post.media_likes,
+        tips_amount: post.tips,
+        unlocks_count: 0,
+        content_type: post.content_type,
+      });
+      deps.repository.upsertPostHistory({
+        post_id: post.id,
+        status: "activo",
+        first_seen: today,
+      });
+      deps.repository.upsertFypTracker({
+        post_id: post.id,
+        date: today,
+        fyp_flags: post.fyp_flags,
+        likes: post.likes,
+        media_likes: post.media_likes,
+        tips: post.tips,
+      });
+    }
+  });
 }
 
 export function registerPostsTools(server: McpServer, deps: ToolDeps): void {
@@ -237,7 +232,6 @@ export function registerPostsTools(server: McpServer, deps: ToolDeps): void {
       const { posts } = await fetchTimeline(deps);
       const selected = posts.slice(0, limit);
       persistSnapshot(deps, selected);
-      const scores = selected.map(postScore).sort((a, b) => a - b);
       const resumen = {
         total_publicaciones: selected.length,
         rendimiento_por_tipo: summarizeByContentType(selected),
@@ -255,32 +249,40 @@ export function registerPostsTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Perfil completo de un post",
       description:
-        "Score ponderado, percentil vs el resto, copy (emojis, preguntas, longitud), hashtags y huella del post.",
+        "Score ponderado, percentil vs el resto, copy (emojis, preguntas, longitud), hashtags y huella del post. Usa /posts/{id} si no está en el timeline reciente.",
       inputSchema: z.object({
         post_id: z.string().min(1).describe("ID del post a analizar"),
       }),
     },
     async ({ post_id }) => {
       const { posts } = await fetchTimeline(deps);
-      const post = posts.find((p) => p.id === post_id);
+      let post = posts.find((p) => p.id === post_id);
+      let fuente = "timeline";
+      if (!post) {
+        const detalle = await deps.engine.getPostById(post_id);
+        if (detalle) {
+          post = mapPost(detalle, new Map());
+          fuente = "posts/{id}";
+        }
+      }
       if (!post) {
         return {
-          content: [{ type: "text", text: `Post ${post_id} no encontrado en los primeros ${posts.length} posts del timeline.` }],
+          content: [{ type: "text", text: `Post ${post_id} no encontrado en el timeline ni vía /posts/{id}.` }],
           isError: true,
         };
       }
       const scores = posts.map(postScore).sort((a, b) => a - b);
-      const copy = post.content;
-      const emojis = extractEmojis(copy);
+      const copyAnalysis = analyzeCopy(post.content);
       const resumen = {
         ...post,
+        fuente,
         score: postScore(post),
         percentil: percentileRank(scores, postScore(post)),
         copy: {
-          longitud_caracteres: copy.length,
-          preguntas: /\?/.test(copy),
-          emojis_contados: emojis,
-          llamada_accion: /(dm|message|comenta|follow|sub|tip|link|compra)/i.test(copy),
+          longitud_caracteres: copyAnalysis.longitud,
+          preguntas: copyAnalysis.pregunta,
+          emojis_contados: copyAnalysis.emojis,
+          llamada_accion: copyAnalysis.cta,
           hashtags: post.hashtags,
         },
         huella: {
@@ -415,11 +417,68 @@ export function registerPostsTools(server: McpServer, deps: ToolDeps): void {
         }))
         .sort((a, b) => b.media_likes - a.media_likes);
 
+      const hoy = Date.now();
+      const hace7 = new Date(hoy - 7 * 86400000).toISOString().slice(0, 10);
+      const hace14 = new Date(hoy - 14 * 86400000).toISOString().slice(0, 10);
+      const wowPorTag = new Map<string, { actual: number; previo: number }>();
+      for (const row of deps.repository.getAllHashtagMetrics()) {
+        const bucket = row.date >= hace7 ? "actual" : row.date >= hace14 ? "previo" : null;
+        if (!bucket) continue;
+        const entry = wowPorTag.get(row.hashtag) ?? { actual: 0, previo: 0 };
+        entry[bucket] += row.media_likes;
+        wowPorTag.set(row.hashtag, entry);
+      }
+      const tendencia_wow = [...wowPorTag.entries()]
+        .map(([tag, v]) => ({
+          tag,
+          media_likes_7d: v.actual,
+          media_likes_7d_previos: v.previo,
+          delta_wow: v.actual - v.previo,
+        }))
+        .filter((t) => t.media_likes_7d > 0 || t.media_likes_7d_previos > 0)
+        .sort((a, b) => b.delta_wow - a.delta_wow);
+
       const resumen = {
         total_posts_analizados: posts.length,
         hashtags_distintos: ranking.length,
         ranking_por_media_likes: ranking,
+        tendencia_wow,
+        notas:
+          tendencia_wow.length === 0
+            ? "Sin historial WoW todavía: ejecuta snapshot_diario durante al menos dos semanas para poblar hashtag_metrics."
+            : "delta_wow compara media-likes de los últimos 7 días vs los 7 anteriores.",
       };
+      return {
+        content: [{ type: "text", text: JSON.stringify(resumen) }],
+        structuredContent: resumen,
+      };
+    }
+  );
+
+  server.registerTool(
+    "ranking_posts",
+    {
+      title: "Ranking completo de publicaciones",
+      description:
+        "Lista todas las publicaciones del timeline ordenadas por score ponderado con posición y percentil.",
+      inputSchema: z.object({
+        limite: z.number().int().min(1).max(100).optional().describe("Número máximo de posts a listar"),
+      }),
+    },
+    async ({ limite }) => {
+      const limit = limite ?? 25;
+      const { posts } = await fetchTimeline(deps, "", false);
+      const scores = posts.map(postScore).sort((a, b) => a - b);
+      const ranking = posts
+        .map((post) => ({ ...post, score: postScore(post) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map((post, index) => ({
+          posicion: index + 1,
+          percentil: percentileRank(scores, post.score),
+          ...post,
+        }));
+      const resumen = { total_evaluados: posts.length, ranking };
       return {
         content: [{ type: "text", text: JSON.stringify(resumen) }],
         structuredContent: resumen,
@@ -659,11 +718,4 @@ export function registerPostsTools(server: McpServer, deps: ToolDeps): void {
       };
     }
   );
-}
-
-function extractEmojis(text: string): number {
-  const matches = text.match(
-    /(\p{Extended_Pictographic}|\p{Emoji_Presentation}|\u00a9|\u00ae|[\u2600-\u27bf])/gu
-  );
-  return matches?.length ?? 0;
 }

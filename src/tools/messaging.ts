@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolDeps, MessagingGroup } from "./types.js";
-import { toNumber } from "./helpers.js";
+import { pearsonCorrelation, toIso, toNumber } from "./helpers.js";
 
 interface MessagePayload {
   messages?: Array<{
@@ -13,10 +13,6 @@ interface MessagePayload {
   }>;
   tips?: Array<{ amount?: number; fromAccountId?: string; createdAt?: number | string; [key: string]: unknown }>;
   [key: string]: unknown;
-}
-
-function tipAmount(value: unknown): number {
-  return toNumber(value);
 }
 
 export function registerMessagingTools(server: McpServer, deps: ToolDeps): void {
@@ -45,7 +41,7 @@ export function registerMessagingTools(server: McpServer, deps: ToolDeps): void 
           );
           const tips = payload.tips ?? [];
           propinas_contadas += tips.length;
-          propinas_total += tips.reduce((sum, tip) => sum + tipAmount(tip.amount), 0);
+          propinas_total += tips.reduce((sum, tip) => sum + toNumber(tip.amount), 0);
         } catch {
           continue;
         }
@@ -93,7 +89,7 @@ export function registerMessagingTools(server: McpServer, deps: ToolDeps): void 
           );
           const tips = payload.tips ?? [];
           for (const tip of tips) {
-            const amount = tipAmount(tip.amount);
+            const amount = toNumber(tip.amount);
             if (amount <= 0) continue;
             const fanKey = String(tip.fromAccountId ?? userId ?? group.id);
             const current = gastosPorFan.get(fanKey) ?? { username, total: 0, propinas: 0 };
@@ -124,6 +120,71 @@ export function registerMessagingTools(server: McpServer, deps: ToolDeps): void 
           ranking.length === 0
             ? "Sin propinas detectadas en los mensajes recientes."
             : "Basado en los últimos 50 mensajes por conversación; puede requerir más historial.",
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(resumen) }],
+        structuredContent: resumen,
+      };
+    }
+  );
+
+  server.registerTool(
+    "correlacion_mensajes_posts",
+    {
+      title: "Correlación mensajes ↔ posts",
+      description:
+        "Cruza la actividad de mensajes por día (messaging/groups) con las publicaciones por día para medir si publicar impulsa los mensajes (correlación de Pearson).",
+      inputSchema: z.object({}).strict(),
+    },
+    async () => {
+      const data = await deps.engine.fetchApi<{ groups?: MessagingGroup[] }>(
+        "/messaging/groups?limit=100&offset=0"
+      );
+      const groups = data.groups ?? [];
+      const mensajesPorDia = new Map<string, number>();
+      for (const group of groups) {
+        const iso = toIso(group.lastMessage?.createdAt);
+        if (!iso) continue;
+        const dia = iso.slice(0, 10);
+        mensajesPorDia.set(dia, (mensajesPorDia.get(dia) ?? 0) + 1);
+      }
+
+      const account = await deps.engine.getOwnAccount();
+      const timeline = await deps.engine.getTimeline(account.id ?? "", { limit: 50 });
+      const postsPorDia = new Map<string, number>();
+      for (const post of timeline.posts ?? []) {
+        const iso = toIso(post.createdAt);
+        if (!iso) continue;
+        const dia = iso.slice(0, 10);
+        postsPorDia.set(dia, (postsPorDia.get(dia) ?? 0) + 1);
+      }
+
+      const dias = [...new Set([...mensajesPorDia.keys(), ...postsPorDia.keys()])].sort();
+      const xs = dias.map((d) => postsPorDia.get(d) ?? 0);
+      const ys = dias.map((d) => mensajesPorDia.get(d) ?? 0);
+      const r = pearsonCorrelation(xs, ys);
+
+      const resumen = {
+        dias_analizados: dias.length,
+        conversaciones_activas: groups.length,
+        correlacion_pearson: r,
+        interpretacion:
+          r === null
+            ? "Datos insuficientes para correlacionar (se necesitan días con actividad variada)."
+            : r >= 0.5
+              ? "Correlación positiva fuerte: publicar coincide con picos de mensajes. Mantén la frecuencia."
+              : r >= 0.2
+                ? "Correlación positiva débil: publicar ayuda algo a activar mensajes."
+                : r <= -0.2
+                  ? "Correlación negativa: los picos de mensajes no siguen a las publicaciones."
+                  : "Sin relación aparente entre publicar y recibir mensajes.",
+        actividad_por_dia: dias.map((d) => ({
+          dia: d,
+          posts: postsPorDia.get(d) ?? 0,
+          conversaciones_con_mensaje: mensajesPorDia.get(d) ?? 0,
+        })),
+        notas:
+          "Proxy basado en el último mensaje de cada conversación; la API no expone el historial completo de mensajes por fecha.",
       };
       return {
         content: [{ type: "text", text: JSON.stringify(resumen) }],
@@ -205,24 +266,28 @@ export function registerMessagingTools(server: McpServer, deps: ToolDeps): void 
       const vault = deps.repository.getVaultMedia();
       const posts = deps.repository.getPostMetrics(100);
 
-      const porTipo = new Map<string, { media: number; likes: number; precio_total: number; con_precio: number }>();
+      const porTipo = new Map<string, { media: number; likes: number; unlocks: number; precio_total: number; con_precio: number }>();
       for (const item of vault) {
         const type = item.media_type || "desconocido";
-        const current = porTipo.get(type) ?? { media: 0, likes: 0, precio_total: 0, con_precio: 0 };
+        const current = porTipo.get(type) ?? { media: 0, likes: 0, unlocks: 0, precio_total: 0, con_precio: 0 };
         current.media += 1;
         current.likes += item.likes;
+        current.unlocks += item.unlocks;
         current.precio_total += item.price;
         if (item.price > 0) current.con_precio += 1;
         porTipo.set(type, current);
       }
 
       const ingresosTotales = posts.reduce((s, p) => s + p.tips_amount, 0);
-      const desbloqueos = posts.reduce((s, p) => s + p.unlocks_count, 0);
+      const desbloqueosPosts = posts.reduce((s, p) => s + p.unlocks_count, 0);
+      const desbloqueosVault = vault.reduce((s, item) => s + item.unlocks, 0);
 
       const sugerencias = [...porTipo.entries()].map(([tipo, datos]) => ({
         tipo,
         media: datos.media,
         likes_promedio: datos.media > 0 ? Number((datos.likes / datos.media).toFixed(2)) : 0,
+        desbloqueos: datos.unlocks,
+        ingreso_estimado: Number((datos.unlocks * (datos.con_precio > 0 ? datos.precio_total / datos.con_precio : 0)).toFixed(2)),
         precio_promedio_existente:
           datos.con_precio > 0 ? Number((datos.precio_total / datos.con_precio).toFixed(2)) : 0,
         sugerencia_usd:
@@ -237,7 +302,8 @@ export function registerMessagingTools(server: McpServer, deps: ToolDeps): void 
 
       const resultado = {
         ingresos_registrados: ingresosTotales,
-        desbloqueos_registrados: desbloqueos,
+        desbloqueos_registrados: desbloqueosPosts,
+        desbloqueos_vault: desbloqueosVault,
         sugerencias_por_tipo: sugerencias,
         notas:
           vault.length === 0
